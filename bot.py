@@ -1128,7 +1128,9 @@ def title_dedup_tokens(title: str) -> set[str]:
     for token in re.findall(r"[a-zа-яё0-9]+", normalized, flags=re.IGNORECASE):
         if len(token) < 4 or token in TITLE_DEDUP_STOPWORDS:
             continue
-        stem = token[:7] if len(token) >= 7 else token
+        # Убираем окончания слов: «Атлетиком» и «Атлетик» должны
+        # считаться одной командой при сравнении заголовков.
+        stem = token[:6] if len(token) >= 6 else token
         tokens.add(stem)
     return tokens
 
@@ -1142,7 +1144,9 @@ def is_similar_news_title(title: str, previous_titles: List[str]) -> bool:
         previous = title_dedup_tokens(previous_title)
         common = current & previous
         union = current | previous
-        if len(common) >= 3 and len(common) / max(1, len(union)) >= 0.35:
+        # Для коротких спортивных заголовков двух совпавших сущностей
+        # (например, названий команд) достаточно, если пересечение заметное.
+        if len(common) >= 2 and len(common) / max(1, len(union)) >= 0.30:
             return True
     return False
 
