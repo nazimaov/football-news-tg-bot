@@ -47,7 +47,7 @@ REQUEST_TIMEOUT = 25
 CHECK_LIMIT_PER_FEED = 60
 SLEEP_BETWEEN_POSTS = 2 * 60
 LOOP_MIN_SECONDS = 40 * 60  # минимум 40 минут между циклами
-LOOP_MAX_SECONDS = 40 * 60  # ровно 40 минут между циклами
+LOOP_MAX_SECONDS = 60 * 60  # максимум 60 минут между циклами
 # Одноразовый ручной запуск: после указанного времени снова действует обычная пауза.
 FORCE_FIRST_POST_BEFORE_UTC = datetime(2026, 11, 21, 0, 10, tzinfo=timezone.utc)
 STRICT_KEYWORD_FILTER = True
