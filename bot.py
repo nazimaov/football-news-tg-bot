@@ -213,32 +213,32 @@ TEAM_NAME_RU_MAP = {
 RSS_FEEDS = [
     {
         "name": "Sports.ru",
-        "url": "https://github.com/nazimaov3-blip/rss/blob/main/Sports.xml",
+        "url": "https://raw.githubusercontent.com/nazimaov/football-rss-live/main/Sports.xml",
         "emoji": "⚽"
     },
     {
         "name": "Чемпионат",
-        "url": "https://github.com/nazimaov3-blip/rss/blob/main/Championat.xml",
+        "url": "https://raw.githubusercontent.com/nazimaov/football-rss-live/main/Championat.xml",
         "emoji": "🔥"
     },
     {
         "name": "Матч ТВ",
-        "url": "https://github.com/nazimaov3-blip/rss/blob/main/MatchTV.xml",
+        "url": "https://raw.githubusercontent.com/nazimaov/football-rss-live/main/MatchTV.xml",
         "emoji": "📺"
     },
     {
         "name": "Azerisport",
-        "url": "https://github.com/nazimaov3-blip/rss/blob/main/Azerisport.xml",
+        "url": "https://raw.githubusercontent.com/nazimaov/football-rss-live/main/Azerisport.xml",
         "emoji": "⚽"
     },
     {
         "name": "Euro-Football",
-        "url": "https://nazimaov3-blip.github.io/rss/Euro-Football.xml",
+        "url": "https://raw.githubusercontent.com/nazimaov/football-rss-live/main/Euro-Football.xml",
         "emoji": "📰"
     },
     {
         "name": "Soccer",
-        "url": "https://github.com/nazimaov3-blip/rss/blob/main/Soccer.ru.xml",
+        "url": "https://raw.githubusercontent.com/nazimaov/football-rss-live/main/Soccer.ru.xml",
         "emoji": "⚽"
     },
 ]
