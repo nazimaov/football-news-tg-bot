@@ -682,6 +682,13 @@ def moderator_loop() -> None:
             posted_data = load_posted()
             known_titles = list(posted_data.get("titles", []))
             known_titles.extend(posted_data.get("moderation_titles", []))
+            exact_known_title_keys = {build_title_key(item) for item in known_titles}
+            is_own_message = str(message_id) in PUBLISHER_MESSAGE_IDS
+            # Свой пост пропускаем только если это именно тот заголовок,
+            # который только что записал издатель. Переформулированный дубль
+            # собственного поста всё равно должен пройти модерацию.
+            if is_own_message and build_title_key(title) in exact_known_title_keys:
+                continue
             if is_similar_news_title(title, known_titles):
                 if delete_channel_message(message_id):
                     logging.warning(f"Модератор удалил дубль: {title[:120]}")
