@@ -930,7 +930,7 @@ def is_sentence_fragment(text: str) -> bool:
     """Определяет фразу, которая не должна начинать новый блок."""
     normalized = normalize_spaces(text).lower()
     return bool(re.match(
-        r"^(где|когда|котор(?:ый|ая|ое|ые)|что|кто|которых|" 
+        r"^(где|когда|котор(?:ый|ая|ое|ые)|что|кто|которых|"
         r"а|и|но|также|при этом|поскольку|потому что|чтобы|если)\b",
         normalized,
         flags=re.IGNORECASE,
