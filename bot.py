@@ -2169,6 +2169,15 @@ def health_check():
 
 
 def publisher_loop() -> None:
+    # После перезапуска Render не публикуем сразу: иначе каждый деплой
+    # превращается в лишнюю новость с интервалом в несколько минут.
+    initial_wait_seconds = random.randint(LOOP_MIN_SECONDS, LOOP_MAX_SECONDS)
+    logging.info(
+        f"Первый пост после запуска — через {initial_wait_seconds // 3600} ч. "
+        f"{(initial_wait_seconds % 3600) // 60} мин."
+    )
+    time.sleep(initial_wait_seconds)
+
     while True:
         try:
             now_msk = datetime.now(MSK_TZ)
