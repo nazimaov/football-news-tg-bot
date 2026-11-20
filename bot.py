@@ -268,7 +268,7 @@ NON_FOOTBALL_PATTERNS = [
     r"\bmotorsport\b",
     r"\bf1\b|\bf2\b|\bf3\b|\bf4\b",
     r"\bтеннис\w*\b|\btennis\w*\b",
-    r"\bбаскетбол\w*\b|\bbasketball\w*\b|\bnba\b",
+    r"\bбаскетбол\w*\b|\bbasketball\w*\b|\bnba\b|\bнба\b",
     r"\bхоккей\w*\b|\bhockey\w*\b|\bnhl\b",
     r"\bволейбол\w*\b|\bvolleyball\w*\b",
     r"\bбокс\b|\bboxing\b|\bufc\b|\bmma\b",
