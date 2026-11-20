@@ -41,6 +41,7 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "@n_football_news")
 
 POSTED_FILE = "posted_news.json"
+PUBLISHER_MESSAGE_IDS = set()
 REQUEST_TIMEOUT = 25
 CHECK_LIMIT_PER_FEED = 60
 SLEEP_BETWEEN_POSTS = 2 * 60
@@ -441,6 +442,8 @@ def load_posted() -> Dict[str, Any]:
                     data.setdefault("title_keys", [])
                     data.setdefault("link_keys", [])
                     data.setdefault("titles", [])
+                    data.setdefault("moderation_titles", [])
+                    data.setdefault("publisher_message_ids", [])
                     data.setdefault("daily_schedule_dates", [])
                     data.setdefault("daily_schedule_pinned_message_id", None)
                     return data
@@ -452,6 +455,8 @@ def load_posted() -> Dict[str, Any]:
                         "title_keys": [],
                         "link_keys": [],
                         "titles": [],
+                        "moderation_titles": [],
+                        "publisher_message_ids": [],
                         "daily_schedule_dates": [],
                         "daily_schedule_pinned_message_id": None,
                     }
@@ -464,6 +469,8 @@ def load_posted() -> Dict[str, Any]:
         "title_keys": [],
         "link_keys": [],
         "titles": [],
+        "moderation_titles": [],
+        "publisher_message_ids": [],
         "daily_schedule_dates": [],
         "daily_schedule_pinned_message_id": None,
     }
@@ -490,6 +497,8 @@ def save_posted(posted_data: Dict[str, Any]) -> None:
         posted_data["title_keys"] = trim_unique_tail(posted_data.get("title_keys", []), POSTED_HISTORY_LIMIT)
         posted_data["link_keys"] = trim_unique_tail(posted_data.get("link_keys", []), POSTED_HISTORY_LIMIT)
         posted_data["titles"] = trim_unique_tail(posted_data.get("titles", []), POSTED_HISTORY_LIMIT)
+        posted_data["moderation_titles"] = trim_unique_tail(posted_data.get("moderation_titles", []), POSTED_HISTORY_LIMIT)
+        posted_data["publisher_message_ids"] = trim_unique_tail(posted_data.get("publisher_message_ids", []), POSTED_HISTORY_LIMIT)
         posted_data["daily_schedule_dates"] = trim_unique_tail(posted_data.get("daily_schedule_dates", []), 120)
         
         with open(POSTED_FILE, "w", encoding="utf-8") as f:
@@ -594,6 +603,92 @@ def delete_channel_message(message_id: int) -> bool:
             "message_id": message_id
         }
     )
+
+
+def get_telegram_updates(offset: Optional[int] = None) -> Optional[List[Dict[str, Any]]]:
+    """Получает новые публикации канала для фоновой модерации."""
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
+    data = {
+        "timeout": 20,
+        "allowed_updates": json.dumps(["channel_post", "edited_channel_post"]),
+    }
+    if offset is not None:
+        data["offset"] = offset
+    try:
+        response = requests.post(url, data=data, timeout=30)
+        if not response.ok:
+            logging.error(f"getUpdates => {response.status_code}: {response.text}")
+            return None
+        payload = response.json()
+        if not payload.get("ok"):
+            logging.error(f"getUpdates response not ok: {payload}")
+            return None
+        return payload.get("result", [])
+    except Exception as e:
+        logging.error(f"Ошибка получения обновлений Telegram: {e}")
+        return None
+
+
+def is_target_channel(chat: Dict[str, Any]) -> bool:
+    configured = normalize_spaces(CHANNEL_ID).lower()
+    username = normalize_spaces(chat.get("username", "")).lower()
+    if configured.startswith("@"):
+        return username == configured[1:]
+    return str(chat.get("id", "")) == configured
+
+
+def extract_post_title(message: Dict[str, Any]) -> str:
+    raw_text = message.get("text") or message.get("caption") or ""
+    plain_text = strip_html(raw_text)
+    first_line = next((line.strip() for line in plain_text.splitlines() if line.strip()), "")
+    first_line = re.sub(r"^[^\wА-Яа-яЁё]+", "", first_line).strip()
+    return first_line[:300]
+
+
+def moderator_loop() -> None:
+    """Удаляет дубли, опубликованные вручную или прошедшие из другого источника."""
+    PUBLISHER_MESSAGE_IDS.update(load_posted().get("publisher_message_ids", []))
+    offset: Optional[int] = None
+    first_run = True
+    while True:
+        updates = get_telegram_updates(offset)
+        if updates is None:
+            time.sleep(30)
+            continue
+
+        for update in updates:
+            update_id = update.get("update_id")
+            if isinstance(update_id, int):
+                offset = update_id + 1
+
+            if first_run:
+                # Не трогаем старые сообщения после перезапуска сервиса.
+                continue
+
+            message = update.get("channel_post") or update.get("edited_channel_post")
+            if not message or not is_target_channel(message.get("chat", {})):
+                continue
+
+            message_id = message.get("message_id")
+            if message_id is None or str(message_id) in PUBLISHER_MESSAGE_IDS:
+                continue
+
+            title = extract_post_title(message)
+            if len(title) < 20:
+                continue
+
+            posted_data = load_posted()
+            known_titles = list(posted_data.get("titles", []))
+            known_titles.extend(posted_data.get("moderation_titles", []))
+            if is_similar_news_title(title, known_titles):
+                if delete_channel_message(message_id):
+                    logging.warning(f"Модератор удалил дубль: {title[:120]}")
+                continue
+
+            posted_data.setdefault("moderation_titles", []).append(title)
+            save_posted(posted_data)
+
+        first_run = False
 
 
 def pin_channel_message(message_id: int) -> bool:
@@ -2028,6 +2123,8 @@ def publish_news() -> None:
             continue
 
         if success:
+            if message_id is not None:
+                PUBLISHER_MESSAGE_IDS.add(str(message_id))
             posted_ids.add(news_id)
             posted_fingerprints.add(fingerprint)
             if canonical_link:
@@ -2043,6 +2140,7 @@ def publish_news() -> None:
             posted_data["title_keys"] = list(posted_title_keys)
             posted_data["link_keys"] = list(posted_link_keys)
             posted_data["titles"] = posted_titles
+            posted_data.setdefault("publisher_message_ids", []).append(str(message_id or ""))
             save_posted(posted_data)
 
             new_posts += 1
@@ -2083,5 +2181,6 @@ def publisher_loop() -> None:
 
 if __name__ == "__main__":
     threading.Thread(target=publisher_loop, name="publisher", daemon=True).start()
+    threading.Thread(target=moderator_loop, name="moderator", daemon=True).start()
     port = int(os.getenv("PORT", "10000"))
     web_app.run(host="0.0.0.0", port=port)
