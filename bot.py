@@ -440,6 +440,7 @@ def load_posted() -> Dict[str, Any]:
                     data.setdefault("links", [])
                     data.setdefault("title_keys", [])
                     data.setdefault("link_keys", [])
+                    data.setdefault("titles", [])
                     data.setdefault("daily_schedule_dates", [])
                     data.setdefault("daily_schedule_pinned_message_id", None)
                     return data
@@ -450,6 +451,7 @@ def load_posted() -> Dict[str, Any]:
                         "links": [],
                         "title_keys": [],
                         "link_keys": [],
+                        "titles": [],
                         "daily_schedule_dates": [],
                         "daily_schedule_pinned_message_id": None,
                     }
@@ -461,6 +463,7 @@ def load_posted() -> Dict[str, Any]:
         "links": [],
         "title_keys": [],
         "link_keys": [],
+        "titles": [],
         "daily_schedule_dates": [],
         "daily_schedule_pinned_message_id": None,
     }
@@ -486,6 +489,7 @@ def save_posted(posted_data: Dict[str, Any]) -> None:
         posted_data["links"] = trim_unique_tail(posted_data.get("links", []), POSTED_HISTORY_LIMIT)
         posted_data["title_keys"] = trim_unique_tail(posted_data.get("title_keys", []), POSTED_HISTORY_LIMIT)
         posted_data["link_keys"] = trim_unique_tail(posted_data.get("link_keys", []), POSTED_HISTORY_LIMIT)
+        posted_data["titles"] = trim_unique_tail(posted_data.get("titles", []), POSTED_HISTORY_LIMIT)
         posted_data["daily_schedule_dates"] = trim_unique_tail(posted_data.get("daily_schedule_dates", []), 120)
         
         with open(POSTED_FILE, "w", encoding="utf-8") as f:
@@ -975,6 +979,39 @@ def build_title_key(title: str) -> str:
     normalized = re.sub(r"\b(?:live|онлайн|обновляется)\b", " ", normalized, flags=re.IGNORECASE)
     normalized = re.sub(r"\s+", " ", normalized).strip()
     return hash_text(normalized)
+
+
+TITLE_DEDUP_STOPWORDS = {
+    "и", "в", "во", "на", "по", "из", "за", "для", "над", "после", "до",
+    "не", "это", "как", "что", "кто", "его", "ее", "их", "у", "о", "об",
+    "матч", "матче", "тура", "туре", "сезона", "сезоне", "чемпионата",
+    "кубка", "лиги", "лиге", "футбольный", "футбольного", "новости",
+}
+
+
+def title_dedup_tokens(title: str) -> set[str]:
+    normalized = normalize_title_for_fingerprint(title)
+    tokens = set()
+    for token in re.findall(r"[a-zа-яё0-9]+", normalized, flags=re.IGNORECASE):
+        if len(token) < 4 or token in TITLE_DEDUP_STOPWORDS:
+            continue
+        stem = token[:7] if len(token) >= 7 else token
+        tokens.add(stem)
+    return tokens
+
+
+def is_similar_news_title(title: str, previous_titles: List[str]) -> bool:
+    current = title_dedup_tokens(title)
+    if len(current) < 2:
+        return False
+
+    for previous_title in previous_titles:
+        previous = title_dedup_tokens(previous_title)
+        common = current & previous
+        union = current | previous
+        if len(common) >= 3 and len(common) / max(1, len(union)) >= 0.35:
+            return True
+    return False
 
 
 def build_link_key(url: str) -> str:
@@ -1892,6 +1929,9 @@ def publish_news() -> None:
     posted_ids = set(posted_data.get("ids", []))
     posted_fingerprints = set(posted_data.get("fingerprints", []))
     posted_links = set(posted_data.get("links", []))
+    posted_title_keys = set(posted_data.get("title_keys", []))
+    posted_link_keys = set(posted_data.get("link_keys", []))
+    posted_titles = list(posted_data.get("titles", []))
 
     news_items = fetch_news()
     posts_goal = random.randint(MIN_POSTS_PER_CYCLE, MAX_POSTS_PER_CYCLE)
@@ -1906,12 +1946,22 @@ def publish_news() -> None:
         fingerprint = item["fingerprint"]
         canonical_link = item.get("canonical_link", "")
         entry = item["entry"]
+        title = entry.get("title", "")
+        title_key = build_title_key(title)
+        link_key = build_link_key(canonical_link)
 
         if news_id in posted_ids:
             continue
         if fingerprint in posted_fingerprints:
             continue
         if canonical_link and canonical_link in posted_links:
+            continue
+        if title_key in posted_title_keys:
+            continue
+        if link_key and link_key in posted_link_keys:
+            continue
+        if is_similar_news_title(title, posted_titles):
+            logging.info(f"Пропускаю смысловой дубль: {title[:120]}")
             continue
 
         article_text = None
@@ -1982,10 +2032,17 @@ def publish_news() -> None:
             posted_fingerprints.add(fingerprint)
             if canonical_link:
                 posted_links.add(canonical_link)
+            posted_title_keys.add(title_key)
+            if link_key:
+                posted_link_keys.add(link_key)
+            posted_titles.append(title)
 
             posted_data["ids"] = list(posted_ids)
             posted_data["fingerprints"] = list(posted_fingerprints)
             posted_data["links"] = list(posted_links)
+            posted_data["title_keys"] = list(posted_title_keys)
+            posted_data["link_keys"] = list(posted_link_keys)
+            posted_data["titles"] = posted_titles
             save_posted(posted_data)
 
             new_posts += 1
