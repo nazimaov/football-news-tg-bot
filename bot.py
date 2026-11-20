@@ -926,6 +926,17 @@ def split_sentences(text: str) -> List[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
+def is_sentence_fragment(text: str) -> bool:
+    """Определяет фразу, которая не должна начинать новый блок."""
+    normalized = normalize_spaces(text).lower()
+    return bool(re.match(
+        r"^(где|когда|котор(?:ый|ая|ое|ые)|что|кто|которых|" 
+        r"а|и|но|также|при этом|поскольку|потому что|чтобы|если)\b",
+        normalized,
+        flags=re.IGNORECASE,
+    ))
+
+
 def remove_noise_lines(text: str) -> str:
     if not text:
         return ""
@@ -1414,6 +1425,10 @@ def build_post_story(title: str, summary: str) -> Tuple[str, str, str]:
     seen_keys = set()
     for sentence in raw_sentences:
         cleaned_sentence = sanitize_post_sentence(sentence, title)
+        if sentences and is_sentence_fragment(cleaned_sentence):
+            # Не выносим придаточное предложение в отдельные «Детали».
+            sentences[-1] = normalize_spaces(f"{sentences[-1]} {cleaned_sentence}")
+            continue
         key = sentence_key(cleaned_sentence)
         if not key or key in seen_keys:
             continue
@@ -1424,7 +1439,9 @@ def build_post_story(title: str, summary: str) -> Tuple[str, str, str]:
         return build_safe_fallback_story(title, summary)
 
     # Распределяем предложения: первое в Коротко, следующие в Детали
-    lead = truncate_smart(sentences[0], 240)
+    # Сначала сохраняем целое предложение. Сокращение допускается только
+    # на позднем этапе, если весь пост действительно не помещается.
+    lead = truncate_smart(sentences[0], 520)
 
     details_source = " ".join(sentences[1:4]) if len(sentences) > 1 else ""
     if not details_source:
