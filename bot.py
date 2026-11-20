@@ -645,6 +645,24 @@ def extract_post_title(message: Dict[str, Any]) -> str:
     return extract_title_from_text(raw_text)
 
 
+def extract_post_image_key(message: Dict[str, Any]) -> str:
+    """Возвращает устойчивый идентификатор изображения/медиа поста."""
+    photos = message.get("photo") or []
+    if isinstance(photos, list) and photos:
+        photo = photos[-1] if isinstance(photos[-1], dict) else {}
+        file_key = photo.get("file_unique_id") or photo.get("file_id")
+        if file_key:
+            return f"photo:{file_key}"
+
+    for media_type in ("video", "animation", "document"):
+        media = message.get(media_type) or {}
+        if isinstance(media, dict):
+            file_key = media.get("file_unique_id") or media.get("file_id")
+            if file_key:
+                return f"{media_type}:{file_key}"
+    return ""
+
+
 def extract_title_from_text(raw_text: str) -> str:
     soup = BeautifulSoup(raw_text or "", "html.parser")
     plain_text = soup.get_text("\n", strip=True)
@@ -710,16 +728,26 @@ def moderator_loop() -> None:
             title = extract_post_title(message)
             if len(title) < 20:
                 continue
+            image_key = extract_post_image_key(message)
 
             posted_data = load_posted()
             known_titles = list(posted_data.get("titles", []))
             known_titles.extend(posted_data.get("moderation_titles", []))
+            known_image_keys = set(posted_data.get("image_keys", []))
+            known_image_keys.update(posted_data.get("moderation_image_keys", []))
             exact_known_title_keys = {build_title_key(item) for item in known_titles}
             is_own_message = str(message_id) in PUBLISHER_MESSAGE_IDS
             # Свой пост пропускаем только если это именно тот заголовок,
             # который только что записал издатель. Переформулированный дубль
             # собственного поста всё равно должен пройти модерацию.
             if is_own_message and build_title_key(title) in exact_known_title_keys:
+                if image_key and image_key not in known_image_keys:
+                    posted_data.setdefault("moderation_image_keys", []).append(image_key)
+                    save_posted(posted_data)
+                continue
+            if image_key and image_key in known_image_keys:
+                if delete_channel_message(message_id):
+                    logging.warning(f"Модератор удалил дубль по изображению: {title[:120]}")
                 continue
             if is_similar_news_title(title, known_titles):
                 if delete_channel_message(message_id):
@@ -727,6 +755,8 @@ def moderator_loop() -> None:
                 continue
 
             posted_data.setdefault("moderation_titles", []).append(title)
+            if image_key:
+                posted_data.setdefault("moderation_image_keys", []).append(image_key)
             save_posted(posted_data)
 
 def pin_channel_message(message_id: int) -> bool:
