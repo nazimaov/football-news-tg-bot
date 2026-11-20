@@ -1445,14 +1445,18 @@ def build_post_story(title: str, summary: str) -> Tuple[str, str, str]:
 
     details_source = " ".join(sentences[1:4]) if len(sentences) > 1 else ""
     if not details_source:
-        # Если в summary только одно предложение, пытаемся выделить детали по частям фразы.
-        clauses = [normalize_spaces(part) for part in re.split(r"[,:;]\s+", sentences[0]) if normalize_spaces(part)]
+        # Не режем одно предложение по запятым: так придаточные вроде
+        # «где ...» ошибочно превращались в отдельный блок «Детали».
+        clauses = [normalize_spaces(part) for part in re.split(r"[;:]\s+", sentences[0]) if normalize_spaces(part)]
         if len(clauses) >= 3:
-            lead = truncate_smart(" ".join(clauses[:2]), 240)
-            details_source = " ".join(clauses[2:])
+            candidate_details = " ".join(clauses[2:])
+            if not is_sentence_fragment(candidate_details):
+                lead = truncate_smart(" ".join(clauses[:2]), 520)
+                details_source = candidate_details
         elif len(clauses) == 2:
-            lead = truncate_smart(clauses[0], 240)
-            details_source = clauses[1]
+            if not is_sentence_fragment(clauses[1]):
+                lead = truncate_smart(clauses[0], 520)
+                details_source = clauses[1]
         elif len(sentences[0]) > 420:
             # Для очень длинной единственной фразы переносим хвост в Детали.
             lead_cut = sentences[0][:240]
