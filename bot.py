@@ -66,6 +66,7 @@ LIVERESULT_MAX_AGE_HOURS = 8
 SCHEDULE_POST_GRACE_MINUTES = 90
 DAILY_SCHEDULE_HOUR_MSK = 6
 DAILY_SCHEDULE_WINDOW_MINUTES = 60
+SCHEDULE_POLL_SECONDS = 60
 if ZoneInfo is not None:
     try:
         MSK_TZ = ZoneInfo("Europe/Moscow")
@@ -2036,6 +2037,16 @@ def maybe_publish_daily_schedule(now_msk: datetime) -> None:
     logging.info("Ежедневное расписание матчей опубликовано.")
 
 
+def schedule_loop() -> None:
+    """Независимо проверяет утреннее расписание, не дожидаясь новостей."""
+    while True:
+        try:
+            maybe_publish_daily_schedule(datetime.now(MSK_TZ))
+        except Exception as e:
+            logging.error(f"Ошибка цикла ежедневного расписания: {e}")
+        time.sleep(SCHEDULE_POLL_SECONDS)
+
+
 # =========================================================
 # RSS
 # =========================================================
@@ -2274,8 +2285,6 @@ def publisher_loop() -> None:
 
     while True:
         try:
-            now_msk = datetime.now(MSK_TZ)
-            maybe_publish_daily_schedule(now_msk)
             publish_news()
         except Exception as e:
             logging.error(f"Глобальная ошибка: {e}")
@@ -2290,6 +2299,7 @@ def publisher_loop() -> None:
 
 if __name__ == "__main__":
     threading.Thread(target=moderator_loop, name="moderator", daemon=True).start()
+    threading.Thread(target=schedule_loop, name="daily-schedule", daemon=True).start()
     threading.Thread(target=publisher_loop, name="publisher", daemon=True).start()
     port = int(os.getenv("PORT", "10000"))
     web_app.run(host="0.0.0.0", port=port)
