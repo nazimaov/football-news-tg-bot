@@ -648,8 +648,14 @@ def extract_post_title(message: Dict[str, Any]) -> str:
 def moderator_loop() -> None:
     """Удаляет дубли, опубликованные вручную или прошедшие из другого источника."""
     PUBLISHER_MESSAGE_IDS.update(load_posted().get("publisher_message_ids", []))
+    # Фиксируем границу старых обновлений до начала публикаций.
+    initial_updates = get_telegram_updates(-1)
     offset: Optional[int] = None
-    first_run = True
+    if initial_updates:
+        update_ids = [u.get("update_id") for u in initial_updates if isinstance(u.get("update_id"), int)]
+        if update_ids:
+            offset = max(update_ids) + 1
+
     while True:
         updates = get_telegram_updates(offset)
         if updates is None:
@@ -660,10 +666,6 @@ def moderator_loop() -> None:
             update_id = update.get("update_id")
             if isinstance(update_id, int):
                 offset = update_id + 1
-
-            if first_run:
-                # Не трогаем старые сообщения после перезапуска сервиса.
-                continue
 
             message = update.get("channel_post") or update.get("edited_channel_post")
             if not message or not is_target_channel(message.get("chat", {})):
@@ -687,9 +689,6 @@ def moderator_loop() -> None:
 
             posted_data.setdefault("moderation_titles", []).append(title)
             save_posted(posted_data)
-
-        first_run = False
-
 
 def pin_channel_message(message_id: int) -> bool:
     return telegram_request(
@@ -2180,7 +2179,7 @@ def publisher_loop() -> None:
 
 
 if __name__ == "__main__":
-    threading.Thread(target=publisher_loop, name="publisher", daemon=True).start()
     threading.Thread(target=moderator_loop, name="moderator", daemon=True).start()
+    threading.Thread(target=publisher_loop, name="publisher", daemon=True).start()
     port = int(os.getenv("PORT", "10000"))
     web_app.run(host="0.0.0.0", port=port)
