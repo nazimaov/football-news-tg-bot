@@ -39,6 +39,7 @@ if hasattr(sys.stderr, "reconfigure"):
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "@n_football_news")
+CHANNEL_PUBLIC_HISTORY_URL = "https://t.me/s/n_football_news"
 
 POSTED_FILE = "posted_news.json"
 PUBLISHER_MESSAGE_IDS = set()
@@ -641,10 +642,39 @@ def is_target_channel(chat: Dict[str, Any]) -> bool:
 
 def extract_post_title(message: Dict[str, Any]) -> str:
     raw_text = message.get("text") or message.get("caption") or ""
-    plain_text = strip_html(raw_text)
-    first_line = next((line.strip() for line in plain_text.splitlines() if line.strip()), "")
-    first_line = re.sub(r"^[^\wА-Яа-яЁё]+", "", first_line).strip()
-    return first_line[:300]
+    return extract_title_from_text(raw_text)
+
+
+def extract_title_from_text(raw_text: str) -> str:
+    soup = BeautifulSoup(raw_text or "", "html.parser")
+    plain_text = soup.get_text("\n", strip=True)
+    for line in plain_text.splitlines():
+        candidate = re.sub(r"^[^\wА-Яа-яЁё]+", "", line.strip()).strip()
+        if len(candidate) >= 3:
+            return candidate[:300]
+    return ""
+
+
+def fetch_recent_channel_titles() -> List[str]:
+    """Берёт недавние заголовки из публичной ленты канала.
+
+    Render не хранит файлы после перезапуска, поэтому это защищает от
+    повторной публикации уже вышедших новостей даже после нового деплоя.
+    """
+    try:
+        response = requests.get(CHANNEL_PUBLIC_HISTORY_URL, headers=get_headers(), timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        titles = []
+        for node in soup.select(".tgme_widget_message_text"):
+            title = extract_title_from_text(node.get_text("\n", strip=True))
+            if len(title) >= 20:
+                titles.append(title)
+        logging.info(f"Прочитано заголовков из канала для антидублей: {len(titles)}")
+        return titles
+    except Exception as e:
+        logging.warning(f"Не удалось прочитать историю канала: {e}")
+        return []
 
 
 def moderator_loop() -> None:
@@ -674,7 +704,7 @@ def moderator_loop() -> None:
                 continue
 
             message_id = message.get("message_id")
-            if message_id is None or str(message_id) in PUBLISHER_MESSAGE_IDS:
+            if message_id is None:
                 continue
 
             title = extract_post_title(message)
@@ -2035,6 +2065,7 @@ def publish_news() -> None:
     posted_title_keys = set(posted_data.get("title_keys", []))
     posted_link_keys = set(posted_data.get("link_keys", []))
     posted_titles = list(posted_data.get("titles", []))
+    channel_titles = fetch_recent_channel_titles()
 
     news_items = fetch_news()
     posts_goal = random.randint(MIN_POSTS_PER_CYCLE, MAX_POSTS_PER_CYCLE)
@@ -2063,7 +2094,7 @@ def publish_news() -> None:
             continue
         if link_key and link_key in posted_link_keys:
             continue
-        if is_similar_news_title(title, posted_titles):
+        if is_similar_news_title(title, posted_titles) or is_similar_news_title(title, channel_titles):
             logging.info(f"Пропускаю смысловой дубль: {title[:120]}")
             continue
 
