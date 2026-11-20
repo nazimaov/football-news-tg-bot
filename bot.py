@@ -44,7 +44,8 @@ POSTED_FILE = "posted_news.json"
 REQUEST_TIMEOUT = 25
 CHECK_LIMIT_PER_FEED = 60
 SLEEP_BETWEEN_POSTS = 2 * 60
-LOOP_EVERY_SECONDS = 10 * 60  # 10 минут
+LOOP_MIN_SECONDS = 3 * 60 * 60  # минимум 3 часа между циклами
+LOOP_MAX_SECONDS = 4 * 60 * 60  # максимум 4 часа между циклами
 STRICT_KEYWORD_FILTER = True
 MAX_POST_LENGTH = 3200
 MIN_ARTICLE_TEXT_LEN = 220
@@ -53,14 +54,14 @@ MAX_SUMMARY_LEN = 2200
 MAX_HASHTAGS = 8
 DETAILS_FALLBACK_TEXT = "Подробности в источнике по ссылке ниже."
 AUTO_DELETE_GARBAGE_POSTS = True
-MIN_POSTS_PER_CYCLE = 3
-MAX_POSTS_PER_CYCLE = 4
+MIN_POSTS_PER_CYCLE = 1
+MAX_POSTS_PER_CYCLE = 1
 POSTED_HISTORY_LIMIT = 5000   
 GENERAL_NEWS_MAX_AGE_HOURS = 48
 LIVERESULT_MAX_AGE_HOURS = 8
 SCHEDULE_POST_GRACE_MINUTES = 90
 DAILY_SCHEDULE_HOUR_MSK = 6
-DAILY_SCHEDULE_WINDOW_MINUTES = max(5, LOOP_EVERY_SECONDS // 60)
+DAILY_SCHEDULE_WINDOW_MINUTES = 60
 if ZoneInfo is not None:
     try:
         MSK_TZ = ZoneInfo("Europe/Moscow")
@@ -2015,8 +2016,12 @@ def publisher_loop() -> None:
         except Exception as e:
             logging.error(f"Глобальная ошибка: {e}")
 
-        logging.info(f"Жду {LOOP_EVERY_SECONDS} секунд до следующей проверки...")
-        time.sleep(LOOP_EVERY_SECONDS)
+        wait_seconds = random.randint(LOOP_MIN_SECONDS, LOOP_MAX_SECONDS)
+        logging.info(
+            f"Жду {wait_seconds // 3600} ч. "
+            f"{(wait_seconds % 3600) // 60} мин. до следующей публикации..."
+        )
+        time.sleep(wait_seconds)
 
 
 if __name__ == "__main__":
