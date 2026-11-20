@@ -749,6 +749,11 @@ def moderator_loop() -> None:
                 if delete_channel_message(message_id):
                     logging.warning(f"Модератор удалил дубль по изображению: {title[:120]}")
                 continue
+            raw_post_text = message.get("text") or message.get("caption") or ""
+            if is_incomplete_news_post(title, "", raw_post_text):
+                if delete_channel_message(message_id):
+                    logging.warning(f"Модератор удалил неполный анонс: {title[:120]}")
+                continue
             if is_similar_news_title(title, known_titles):
                 if delete_channel_message(message_id):
                     logging.warning(f"Модератор удалил дубль: {title[:120]}")
@@ -1048,10 +1053,29 @@ def is_garbage_title(title: str) -> bool:
     return False
 
 
+INCOMPLETE_NEWS_PATTERNS = (
+    # Анонс обещает конкретный факт, но оставляет сам факт за ссылкой.
+    r"\bчитать\s+дальше\b",
+    r"\bрассказал[аи]?\s*,?\s*кого\b",
+    r"\bрассказал[аи]?\s*,?\s*что\s+именно\b",
+    r"\bкого\s+из\s+одноклубник",
+    r"\bкого\s+он\s+(?:хотел|мог|пригласил)",
+    r"\bназвал[аи]?\s+(?:одного|двух|тр[её]х|четыр[её]х|пять|\d+)\s+(?:игрок|футболист)",
+)
+
+
+def is_incomplete_news_post(title: str, article_text: str, post_text: str) -> bool:
+    """Отбрасывает тизеры, где обещана конкретика, но её нет в посте."""
+    combined = normalize_spaces(strip_html(f"{title} {article_text} {post_text}")).lower()
+    return any(re.search(pattern, combined, flags=re.IGNORECASE) for pattern in INCOMPLETE_NEWS_PATTERNS)
+
+
 def should_auto_delete_post(title: str, link: str, article_text: str, post_text: str) -> bool:
     if not AUTO_DELETE_GARBAGE_POSTS:
         return False
     if is_garbage_title(title):
+        return True
+    if is_incomplete_news_post(title, article_text, post_text):
         return True
     if not is_valid_news_entry(title, link):
         return True
