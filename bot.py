@@ -979,7 +979,9 @@ def is_relevant_news(title: str, summary: str) -> bool:
 
     if not STRICT_KEYWORD_FILTER:
         return True
-    return any(keyword in text for keyword in KEYWORDS)
+    # Ключевое слово должно начинаться с границы слова: «реал» не должно
+    # срабатывать внутри «Монреаль».
+    return any(re.search(r"(?<!\w)" + re.escape(keyword), text) for keyword in KEYWORDS)
 
 
 def is_generic_news_title(title: str) -> bool:
@@ -1045,7 +1047,14 @@ def looks_like_low_quality_article_text(text: str) -> bool:
     return False
 
 
+NON_FOOTBALL_URL_PATTERNS = (
+    r"/(?:hockey|basketball|tennis|volleyball|formula1|f1|boxing|mma|biathlon|handball)(?:/|-)",
+)
+
+
 def is_valid_news_entry(title: str, link: str) -> bool:
+    if any(re.search(pattern, (link or "").lower()) for pattern in NON_FOOTBALL_URL_PATTERNS):
+        return False
     if is_generic_news_title(title):
         return False
     if is_listing_like_url(link):
