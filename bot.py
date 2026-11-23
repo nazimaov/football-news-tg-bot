@@ -275,7 +275,7 @@ NON_FOOTBALL_PATTERNS = [
     r"\bf1\b|\bf2\b|\bf3\b|\bf4\b",
     r"\bтеннис\w*\b|\btennis\w*\b",
     r"\bбаскетбол\w*\b|\bbasketball\w*\b|\bnba\b|\bнба\b",
-    r"\bхоккей\w*\b|\bhockey\w*\b|\bnhl\b",
+    r"\bхоккей\w*\b|\bhockey\w*\b|\bnhl\b|\bнхл\b|\bкхл\b|\bшайб\w*\b",
     r"\bволейбол\w*\b|\bvolleyball\w*\b",
     r"\bбокс\b|\bboxing\b|\bufc\b|\bmma\b",
 ]
@@ -1080,6 +1080,19 @@ def is_incomplete_news_post(title: str, article_text: str, post_text: str) -> bo
     """Отбрасывает тизеры, где обещана конкретика, но её нет в посте."""
     combined = normalize_spaces(strip_html(f"{title} {article_text} {post_text}")).lower()
     return any(re.search(pattern, combined, flags=re.IGNORECASE) for pattern in INCOMPLETE_NEWS_PATTERNS)
+
+
+def is_post_without_facts(entry: Any, article_text: Optional[str]) -> bool:
+    """True, если в посте нет ничего, кроме заголовка: «Коротко» повторяет его,
+    а «Деталей» и «Почему важно» нет."""
+    title = normalize_spaces(entry.get("title", ""))
+    summary = make_rich_summary(entry.get("summary", ""), article_text or "")
+    lead, details, insight = build_post_story(title, summary)
+    if insight:
+        return False
+    if normalize_spaces(details).lower() != normalize_spaces(DETAILS_FALLBACK_TEXT).lower():
+        return False
+    return normalize_title_for_fingerprint(lead) == normalize_title_for_fingerprint(title)
 
 
 def should_auto_delete_post(title: str, link: str, article_text: str, post_text: str) -> bool:
@@ -2212,6 +2225,10 @@ def publish_news() -> None:
             if article_text and not is_relevant_news(entry.get("title", ""), f"{entry.get('summary', '')} {article_text}"):
                 logging.info(f"Пропускаю новость после проверки полной статьи (не футбол): {entry.get('title', '')[:120]}")
                 continue
+
+        if is_post_without_facts(entry, article_text):
+            logging.info(f"Пропускаю пост без фактов (только заголовок): {title[:120]}")
+            continue
 
         post_text = format_post(
             entry=entry,
