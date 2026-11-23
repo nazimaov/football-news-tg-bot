@@ -727,6 +727,8 @@ def set_reaction_as_bot(token: str, message_id: int, emoji: str) -> bool:
         if not response.ok:
             # Токен в лог не пишем, только начало номера бота.
             logging.warning(f"Бот {token.split(':')[0]} не поставил реакцию {emoji}: {response.text[:200]}")
+        if response.ok:
+            logging.info(f"Бот {token.split(':')[0]} поставил реакцию {emoji}")
         return response.ok
     except Exception as e:
         logging.warning(f"Бот {token.split(':')[0]}: ошибка реакции: {e}")
@@ -737,6 +739,7 @@ def react_with_extra_bots(message_id: int, primary_emoji: str) -> None:
     """Каждый дополнительный бот ставит свою реакцию, отличную от остальных."""
     tokens = load_extra_reaction_tokens()
     if not tokens:
+        logging.info("Дополнительные боты для реакций не заданы (REACTION_BOT_TOKENS пуста или токены не распознаны)")
         return
     pool = [e for e in EXTRA_REACTION_POOL if e != primary_emoji]
     for index, token in enumerate(tokens):
@@ -1781,6 +1784,9 @@ def looks_like_quote_headline(t: str) -> bool:
     """Заголовки вида «Цитата». Имя ответил… или «Имя: слова» — это чья-то реплика."""
     if re.match(r"^«[^»]{20,}»", t):
         return True
+    # «Футболист «Вильярреала»: «Барселона» давит на арбитров» — чья-то реплика.
+    if re.match(r"^[^:]{2,70}:\s*[«\"]", t) and not re.match(r"^(официально|срочно|видео|фото|обзор|итоги|анонс|прогноз)", t):
+        return True
     head = re.match(r"^([^:«»]{2,35}):\s", t)
     if head:
         first_word = head.group(1).split()[0]
@@ -2757,6 +2763,7 @@ def publisher_loop() -> None:
 
 
 if __name__ == "__main__":
+    logging.info(f"Дополнительных ботов для реакций загружено: {len(load_extra_reaction_tokens())}")
     threading.Thread(target=moderator_loop, name="moderator", daemon=True).start()
     threading.Thread(target=schedule_loop, name="daily-schedule", daemon=True).start()
     threading.Thread(target=publisher_loop, name="publisher", daemon=True).start()
