@@ -2763,7 +2763,13 @@ def publisher_loop() -> None:
 
 
 if __name__ == "__main__":
-    logging.info(f"Дополнительных ботов для реакций загружено: {len(load_extra_reaction_tokens())}")
+    _raw_reaction_value = os.getenv("REACTION_BOT_TOKENS", "")
+    _found_tokens = re.findall(BOT_TOKEN_PATTERN, _raw_reaction_value)
+    logging.info(
+        f"Дополнительных ботов для реакций загружено: {len(load_extra_reaction_tokens())} "
+        f"(длина значения: {len(_raw_reaction_value)}, найдено токенов: {len(_found_tokens)}, "
+        f"совпало с основным ботом: {sum(1 for t in _found_tokens if t == BOT_TOKEN)})"
+    )
     threading.Thread(target=moderator_loop, name="moderator", daemon=True).start()
     threading.Thread(target=schedule_loop, name="daily-schedule", daemon=True).start()
     threading.Thread(target=publisher_loop, name="publisher", daemon=True).start()
