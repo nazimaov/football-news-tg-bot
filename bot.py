@@ -671,6 +671,44 @@ def send_post_with_image(image_urls: List[Optional[str]], post_text: str) -> Opt
     return send_text_to_telegram_with_message_id(post_text)
 
 
+REACTION_BY_KIND = {
+    "big": "🔥",
+    "transfer": "🤝",
+    "injury": "😢",
+    "coach": "🤔",
+    "result": "⚡",
+    "record": "🏆",
+    "opinion": "🤔",
+    "preview": "👀",
+    "default": "👍",
+}
+REACTION_FALLBACK = "👍"
+
+
+def set_message_reaction(message_id: int, emoji: str) -> bool:
+    return telegram_request(
+        "setMessageReaction",
+        {
+            "chat_id": CHANNEL_ID,
+            "message_id": message_id,
+            "reaction": json.dumps([{"type": "emoji", "emoji": emoji}]),
+        },
+    )
+
+
+def react_to_post(message_id: Optional[int], title: str, summary: str = "") -> None:
+    """Ставит реакцию по смыслу новости. Сбой реакции не мешает публикации."""
+    if message_id is None:
+        return
+    try:
+        kind = detect_news_kind(title, strip_html(summary))
+        emoji = REACTION_BY_KIND.get(kind, REACTION_FALLBACK)
+        if not set_message_reaction(message_id, emoji) and emoji != REACTION_FALLBACK:
+            set_message_reaction(message_id, REACTION_FALLBACK)
+    except Exception as e:
+        logging.warning(f"Не удалось поставить реакцию: {e}")
+
+
 def delete_channel_message(message_id: int) -> bool:
     return telegram_request(
         "deleteMessage",
@@ -1662,7 +1700,7 @@ OPINION_MARKERS = (
     "оценил", "назвал", "признал", "отреагир", "считает", "рассказал",
     "поделился", "мнение", "интервью", "объяснил", "пояснил", "предупредил",
     "посоветовал", "похвалил", "обвинил", "ответ ", "—о ", "— о ", "реакци",
-    "прогноз", "предрек", "уверен", "убеждён", "убежден", "объяснил",
+    "дал прогноз", "предрек", "уверен", "убеждён", "убежден", "объяснил",
 )
 BIG_MARKERS = (
     "сенсац", "шок", "скандал", "официально", "дисквалиф", "отстранён", "отстранен",
@@ -1694,7 +1732,7 @@ def looks_like_quote_headline(t: str) -> bool:
     head = re.match(r"^([^:«»]{2,35}):\s", t)
     if head:
         first_word = head.group(1).split()[0]
-        return first_word not in {"официально", "срочно", "видео", "фото", "обзор", "итоги", "live", "онлайн"}
+        return first_word not in {"официально", "срочно", "видео", "фото", "обзор", "итоги", "live", "онлайн", "анонс", "прогноз", "новости", "главное", "факты", "трансляция", "превью", "репортаж"}
     return False
 
 
@@ -2601,6 +2639,7 @@ def publish_news() -> None:
         if success:
             if message_id is not None:
                 PUBLISHER_MESSAGE_IDS.add(str(message_id))
+                react_to_post(message_id, title, entry.get("summary", ""))
             posted_ids.add(news_id)
             posted_fingerprints.add(fingerprint)
             if canonical_link:
