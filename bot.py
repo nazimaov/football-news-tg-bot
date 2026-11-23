@@ -599,6 +599,78 @@ def send_photo_to_telegram_with_message_id(photo_url: str, caption: str) -> Opti
     return result.get("message_id")
 
 
+def send_photo_upload_with_message_id(photo_url: str, caption: str) -> Optional[int]:
+    """Скачивает картинку сами и загружает в Telegram файлом.
+
+    Нужно, когда Telegram не смог сам забрать файл по ссылке."""
+    try:
+        image_response = requests.get(photo_url, headers=get_headers(), timeout=REQUEST_TIMEOUT)
+        image_response.raise_for_status()
+        if len(image_response.content) < 500:
+            return None
+        response = requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+            data={"chat_id": CHANNEL_ID, "caption": caption, "parse_mode": "HTML"},
+            files={"photo": ("image.jpg", image_response.content)},
+            timeout=60,
+        )
+        logging.info(f"sendPhoto (upload) => {response.status_code}")
+        if not response.ok:
+            logging.error(f"Telegram error: {response.text}")
+            return None
+        return response.json().get("result", {}).get("message_id")
+    except Exception as e:
+        logging.warning(f"Не удалось загрузить картинку файлом: {e}")
+        return None
+
+
+def send_text_with_image_preview(text: str, image_url: str) -> Optional[int]:
+    """Текстовый пост с картинкой сверху через превью ссылки.
+
+    У подписи к фото лимит 1024 символа, у такого поста его нет."""
+    payload = telegram_request_json(
+        "sendMessage",
+        {
+            "chat_id": CHANNEL_ID,
+            "text": f'<a href="{html_escape(image_url)}">​</a>{text}',
+            "parse_mode": "HTML",
+            "link_preview_options": json.dumps({
+                "url": image_url,
+                "show_above_text": True,
+                "prefer_large_media": True,
+            }),
+        },
+    )
+    if not payload:
+        return None
+    return payload.get("result", {}).get("message_id")
+
+
+def send_post_with_image(image_urls: List[Optional[str]], post_text: str) -> Optional[int]:
+    """Отправляет пост с картинкой, перебирая способы, пока один не сработает."""
+    urls: List[str] = []
+    for url in image_urls:
+        if url and url not in urls:
+            urls.append(url)
+
+    if urls and len(normalize_spaces(strip_html(post_text))) <= 1000:
+        for url in urls:
+            message_id = (
+                send_photo_to_telegram_with_message_id(url, post_text)
+                or send_photo_upload_with_message_id(url, post_text)
+            )
+            if message_id:
+                return message_id
+    elif urls:
+        message_id = send_text_with_image_preview(post_text, urls[0])
+        if message_id:
+            return message_id
+
+    if urls:
+        logging.info("Картинку отправить не удалось, пробую обычный текст")
+    return send_text_to_telegram_with_message_id(post_text)
+
+
 def delete_channel_message(message_id: int) -> bool:
     return telegram_request(
         "deleteMessage",
@@ -2498,29 +2570,21 @@ def publish_news() -> None:
             article_text=article_text
         )
 
-        # Для LiveResult приоритет отдаем изображению из статьи, а не из RSS
-        if is_liveresult_source(item["source_name"]):
-            final_image = article_image or item["image"]
+        # Сначала полноразмерная картинка из статьи, превью из RSS (250 px) — запасная.
+        rss_image = item["image"]
+        rss_is_thumb = bool(rss_image) and "thumb" in rss_image.lower()
+        if is_liveresult_source(item["source_name"]) or rss_is_thumb:
+            image_candidates = [article_image, rss_image]
         else:
-            final_image = item["image"] or article_image
-        if not final_image:
-            final_image = find_fallback_image(title, news_items, news_id)
-            if final_image:
+            image_candidates = [rss_image, article_image]
+        if not any(image_candidates):
+            fallback_image = find_fallback_image(title, news_items, news_id)
+            if fallback_image:
                 logging.info(f"Подобрал картинку по смыслу: {title[:80]}")
+                image_candidates = [fallback_image]
 
-        message_id: Optional[int] = None
-        success = False
-
-        if final_image:
-            message_id = send_photo_to_telegram_with_message_id(final_image, post_text)
-            success = message_id is not None
-            if not success:
-                logging.info("Фото не отправилось, пробую обычный текст")
-                message_id = send_text_to_telegram_with_message_id(post_text)
-                success = message_id is not None
-        else:
-            message_id = send_text_to_telegram_with_message_id(post_text)
-            success = message_id is not None
+        message_id = send_post_with_image(image_candidates, post_text)
+        success = message_id is not None
 
         if success and should_auto_delete_post(
             entry.get("title", ""),
