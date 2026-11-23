@@ -735,31 +735,102 @@ def set_reaction_as_bot(token: str, message_id: int, emoji: str) -> bool:
         return False
 
 
-def react_with_extra_bots(message_id: int, primary_emoji: str) -> None:
-    """Каждый дополнительный бот ставит свою реакцию, отличную от остальных."""
+NEGATIVE_STRONG_MARKERS = (
+    "антирекорд", "травм", "выбыл", "умер", "скончал", "погиб", "дисквал",
+    "скандал", "катастроф", "кризис", "провал", "увол", "отставк", "вылет",
+    "банкрот", "отстранён", "отстранен", "тяжёл", "тяжел",
+)
+NEGATIVE_MARKERS = (
+    "проиграл", "уступил", "поражен", "потерял очки", "потеряли очки",
+    "не смог", "не сумел", "упустил", "штраф", "санкци", "разочаров",
+    "ошибк", "удален", "удалён",
+)
+POSITIVE_MARKERS = (
+    "победил", "обыграл", "выиграл", "одолел", "переиграл", "разгромил",
+    "хет-трик", "покер", "чемпион", "рекорд", "подписал", "продлил",
+    "вернул", "спас", "триумф", "празднов", "завоевал", "красивый гол",
+)
+
+# Реакции из стандартного набора Telegram, сгруппированные по тону новости.
+REACTIONS_POSITIVE = ["🔥", "👏", "🤩", "💯", "❤", "👍"]
+REACTIONS_NEGATIVE = ["😢", "🤔", "😱", "💔", "😐"]
+REACTIONS_NEUTRAL = ["🤔", "👀", "⚡", "👍"]
+REACTION_FALLBACK_BY_TONE = {"pos": "👍", "neg": "🤔", "neu": "🤔"}
+
+
+def detect_sentiment(title: str, summary: str = "") -> str:
+    """pos / neg / neu — хорошая, плохая или нейтральная новость для её героя."""
+    t = normalize_spaces(title).lower()
+    text = f"{t} {normalize_spaces(summary).lower()}"
+    if any(m in t for m in NEGATIVE_STRONG_MARKERS):
+        return "neg"
+    neg = any(m in text for m in NEGATIVE_MARKERS)
+    pos = any(m in text for m in POSITIVE_MARKERS)
+    if neg and not pos:
+        return "neg"
+    if pos and not neg:
+        return "pos"
+    return "neu"
+
+
+def plan_reactions(title: str, summary: str = "") -> Tuple[str, List[str], str]:
+    """Возвращает (реакция основного бота, запас для остальных ботов, запасная реакция)."""
+    clean_summary = strip_html(summary)
+    kind = detect_news_kind(title, clean_summary)
+    tone = detect_sentiment(title, clean_summary)
+    strong_negative = any(m in normalize_spaces(title).lower() for m in NEGATIVE_STRONG_MARKERS)
+    # Поражение одной команды — победа другой, а чужая критика — просто мнение.
+    if kind in {"result", "opinion"} and tone == "neg" and not strong_negative:
+        tone = "neu"
+    pool = {"pos": REACTIONS_POSITIVE, "neg": REACTIONS_NEGATIVE, "neu": REACTIONS_NEUTRAL}[tone]
+
+    if kind == "opinion":
+        primary = "🤔"
+    elif tone == "neg":
+        primary = "😱" if kind == "big" else "😢"
+    elif kind == "preview":
+        primary = "👀"
+    elif kind == "transfer":
+        primary = "🤝"
+    elif kind == "record" and tone == "pos":
+        primary = "🏆"
+    elif kind == "big" and tone == "pos":
+        primary = "🔥"
+    elif kind == "result" and tone == "neu":
+        primary = "⚡"
+    else:
+        primary = pool[0]
+
+    extras = [e for e in pool if e != primary]
+    return primary, extras, REACTION_FALLBACK_BY_TONE[tone]
+
+
+def react_with_extra_bots(message_id: int, primary_emoji: str, pool: Optional[List[str]] = None,
+                          fallback: str = REACTION_FALLBACK) -> None:
+    """Каждый дополнительный бот ставит свою реакцию, подходящую по тону и отличную от остальных."""
     tokens = load_extra_reaction_tokens()
     if not tokens:
         logging.info("Дополнительные боты для реакций не заданы (REACTION_BOT_TOKENS пуста или токены не распознаны)")
         return
-    pool = [e for e in EXTRA_REACTION_POOL if e != primary_emoji]
+    candidates = [e for e in (pool or EXTRA_REACTION_POOL) if e != primary_emoji]
     for index, token in enumerate(tokens):
-        emoji = pool[index % len(pool)]
-        if not set_reaction_as_bot(token, message_id, emoji) and emoji != REACTION_FALLBACK:
-            set_reaction_as_bot(token, message_id, REACTION_FALLBACK)
+        emoji = candidates[index % len(candidates)]
+        if not set_reaction_as_bot(token, message_id, emoji) and emoji != fallback:
+            set_reaction_as_bot(token, message_id, fallback)
         time.sleep(1)
 
 
 def react_to_post(message_id: Optional[int], title: str, summary: str = "") -> None:
-    """Ставит реакцию по смыслу новости. Сбой реакции не мешает публикации."""
+    """Ставит реакцию по смыслу и тону новости. Сбой реакции не мешает публикации."""
     if message_id is None:
         return
     try:
-        kind = detect_news_kind(title, strip_html(summary))
-        emoji = REACTION_BY_KIND.get(kind, REACTION_FALLBACK)
-        if not set_message_reaction(message_id, emoji) and emoji != REACTION_FALLBACK:
-            emoji = REACTION_FALLBACK
+        primary, extras, fallback = plan_reactions(title, summary)
+        emoji = primary
+        if not set_message_reaction(message_id, emoji) and emoji != fallback:
+            emoji = fallback
             set_message_reaction(message_id, emoji)
-        react_with_extra_bots(message_id, emoji)
+        react_with_extra_bots(message_id, emoji, extras, fallback)
     except Exception as e:
         logging.warning(f"Не удалось поставить реакцию: {e}")
 
