@@ -49,7 +49,7 @@ SLEEP_BETWEEN_POSTS = 2 * 60
 LOOP_MIN_SECONDS = 40 * 60  # минимум 40 минут между циклами
 LOOP_MAX_SECONDS = 60 * 60  # максимум 60 минут между циклами
 # Одноразовый ручной запуск: после указанного времени снова действует обычная пауза.
-FORCE_FIRST_POST_BEFORE_UTC = datetime(2026, 11, 23, 12, 23, tzinfo=timezone.utc)
+FORCE_FIRST_POST_BEFORE_UTC = datetime(2026, 11, 23, 12, 0, tzinfo=timezone.utc)
 STRICT_KEYWORD_FILTER = True
 MAX_POST_LENGTH = 3200
 MIN_ARTICLE_TEXT_LEN = 220
@@ -706,6 +706,9 @@ def load_extra_reaction_tokens() -> List[str]:
     Принимает токены через запятую, пробел или с новой строки; всё, что не
     похоже на токен (например, комментарии), игнорируется."""
     raw = os.getenv("REACTION_BOT_TOKENS", "")
+    # Отдельные переменные для одиночных ботов: REACTION_BOT_TOKEN_2 ... REACTION_BOT_TOKEN_9.
+    for number in range(2, 10):
+        raw += chr(10) + os.getenv(f"REACTION_BOT_TOKEN_{number}", "")
     tokens: List[str] = []
     for token in re.findall(BOT_TOKEN_PATTERN, raw):
         if token != BOT_TOKEN and token not in tokens:
@@ -2834,7 +2837,9 @@ def publisher_loop() -> None:
 
 
 if __name__ == "__main__":
-    _raw_reaction_value = os.getenv("REACTION_BOT_TOKENS", "")
+    _raw_reaction_value = "".join(
+        os.getenv(name, "") for name in ["REACTION_BOT_TOKENS"] + [f"REACTION_BOT_TOKEN_{n}" for n in range(2, 10)]
+    )
     _found_tokens = re.findall(BOT_TOKEN_PATTERN, _raw_reaction_value)
     logging.info(
         f"Дополнительных ботов для реакций загружено: {len(load_extra_reaction_tokens())} "
