@@ -49,7 +49,7 @@ SLEEP_BETWEEN_POSTS = 2 * 60
 LOOP_MIN_SECONDS = 40 * 60  # минимум 40 минут между циклами
 LOOP_MAX_SECONDS = 60 * 60  # максимум 60 минут между циклами
 # Одноразовый ручной запуск: после указанного времени снова действует обычная пауза.
-FORCE_FIRST_POST_BEFORE_UTC = datetime(2026, 11, 23, 11, 25, tzinfo=timezone.utc)
+FORCE_FIRST_POST_BEFORE_UTC = datetime(2026, 11, 23, 11, 40, tzinfo=timezone.utc)
 STRICT_KEYWORD_FILTER = True
 MAX_POST_LENGTH = 3200
 MIN_ARTICLE_TEXT_LEN = 220
@@ -1020,6 +1020,10 @@ def looks_like_article_url(url: str) -> bool:
         return False
     if re.search(r"/article/\d+/\d+", path):
         return True
+    if "/matchtvnews_" in path:
+        return True
+    if re.search(r"^/news/\d+/", path):
+        return True
     if re.search(r"/news-\d+.*\.html$", path):
         return True
     if re.search(r"/\d{8,}[-_a-z0-9]*\.html$", path):
@@ -1052,7 +1056,15 @@ NON_FOOTBALL_URL_PATTERNS = (
 )
 
 
+NON_ARTICLE_URL_PATTERNS = (
+    r"/(?:video|photostory|photo|gallery)/",
+    r"matchtvvideo_",
+)
+
+
 def is_valid_news_entry(title: str, link: str) -> bool:
+    if any(re.search(pattern, (link or "").lower()) for pattern in NON_ARTICLE_URL_PATTERNS):
+        return False
     if any(re.search(pattern, (link or "").lower()) for pattern in NON_FOOTBALL_URL_PATTERNS):
         return False
     if is_generic_news_title(title):
@@ -1398,6 +1410,8 @@ def take_best_sentences(text: str, max_sentences: int = 4, max_len: int = 650) -
 
 def make_rich_summary(rss_summary: str, article_text: str) -> str:
     rss_clean = strip_html(rss_summary)
+    # Euro-Football и др. добавляют в анонс ссылку «Читать дальше →»: это не текст новости.
+    rss_clean = normalize_spaces(re.sub(r"читать\s+дальше\s*[→>»….]*", " ", rss_clean, flags=re.IGNORECASE))
     article_clean = normalize_spaces(article_text or "")
 
     if article_clean and len(article_clean) >= MIN_ARTICLE_TEXT_LEN:
@@ -2093,6 +2107,29 @@ def schedule_loop() -> None:
 # =========================================================
 # RSS
 # =========================================================
+GOOGLE_NEWS_DECODE_LIMIT_PER_FEED = 8
+_google_news_cache: Dict[str, str] = {}
+
+
+def is_google_news_link(url: str) -> bool:
+    return urlparse(url or "").netloc.lower() == "news.google.com"
+
+
+def resolve_google_news_link(url: str) -> str:
+    """Превращает ссылку news.google.com/rss/articles/... в адрес статьи."""
+    if url in _google_news_cache:
+        return _google_news_cache[url]
+    resolved = ""
+    try:
+        from googlenewsdecoder import gnewsdecoder
+        result = gnewsdecoder(url, interval=1)
+        resolved = (result or {}).get("decoded_url") or ""
+    except Exception as e:
+        logging.warning(f"Не удалось расшифровать ссылку Google News: {e}")
+    _google_news_cache[url] = resolved
+    return resolved
+
+
 def fetch_news() -> List[Dict[str, Any]]:
     news_list = []
     seen_cycle_keys = set()
@@ -2115,13 +2152,15 @@ def fetch_news() -> List[Dict[str, Any]]:
                 logging.warning(f"RSS может быть проблемным: {feed_info['name']}")
 
             entries = feed.entries[:CHECK_LIMIT_PER_FEED]
+            google_decoded = 0
 
             for entry in entries:
                 title = entry.get("title", "")
                 summary = entry.get("summary", "")
                 link = entry.get("link", "")
 
-                if not is_valid_news_entry(title, link):
+                google_link = is_google_news_link(link)
+                if not google_link and not is_valid_news_entry(title, link):
                     logging.info(f"Пропускаю не-новостной элемент: {title[:80]}")
                     continue
 
@@ -2135,6 +2174,17 @@ def fetch_news() -> List[Dict[str, Any]]:
                 if is_past_schedule_news(entry, feed_info["name"], now_local):
                     logging.info(f"Пропускаю устаревший анонс матча: {title[:80]}")
                     continue
+
+                if google_link:
+                    # Адрес статьи спрятан за редиректом Google News: расшифровываем
+                    # только новости, прошедшие остальные фильтры.
+                    if google_decoded >= GOOGLE_NEWS_DECODE_LIMIT_PER_FEED:
+                        continue
+                    google_decoded += 1
+                    link = resolve_google_news_link(link)
+                    if not link or not is_valid_news_entry(title, link):
+                        continue
+                    entry["link"] = link
 
                 news_id = build_news_id(entry)
                 canonical_link = canonicalize_url(link)
@@ -2169,6 +2219,67 @@ def fetch_news() -> List[Dict[str, Any]]:
 # =========================================================
 # ПУБЛИКАЦИЯ
 # =========================================================
+def find_image_from_similar_news(title: str, news_items: List[Dict[str, Any]], own_id: str) -> Optional[str]:
+    """Берёт картинку из другого источника, где вышла та же новость."""
+    for other in news_items:
+        if other.get("id") == own_id or not other.get("image"):
+            continue
+        other_title = other["entry"].get("title", "")
+        if is_similar_news_title(title, [other_title]):
+            return other["image"]
+    return None
+
+
+def find_commons_image(title: str) -> Optional[str]:
+    """Ищет иллюстрацию на Wikimedia Commons по названиям клубов и именам из заголовка.
+
+    Берём файл только если слово из запроса есть в его названии, чтобы не
+    поставить к новости фото другого клуба или человека."""
+    names = re.findall(r"«([^»]{3,40})»", title)
+    names += re.findall(r"\b([А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+)\b", title)
+    seen = set()
+    for name in names[:3]:
+        name = normalize_spaces(name)
+        if not name or name.lower() in seen:
+            continue
+        seen.add(name.lower())
+        stems = [w[:5].lower() for w in re.findall(r"[A-Za-zА-Яа-яЁё]{4,}", name)]
+        if not stems:
+            continue
+        try:
+            response = requests.get(
+                "https://commons.wikimedia.org/w/api.php",
+                params={
+                    "action": "query", "format": "json", "generator": "search",
+                    "gsrnamespace": 6, "gsrsearch": name, "gsrlimit": 5,
+                    "prop": "imageinfo", "iiprop": "url|mime", "iiurlwidth": 1000,
+                },
+                headers={"User-Agent": "football-news-bot/1.0"},
+                timeout=REQUEST_TIMEOUT,
+            )
+            pages = (response.json().get("query", {}) or {}).get("pages", {}) or {}
+        except Exception as e:
+            logging.warning(f"Поиск картинки на Commons не удался ({name}): {e}")
+            continue
+        for page in sorted(pages.values(), key=lambda x: x.get("index", 99)):
+            info = (page.get("imageinfo") or [{}])[0]
+            if info.get("mime") not in {"image/jpeg", "image/png"}:
+                continue
+            file_title = page.get("title", "").lower()
+            if not all(stem in file_title for stem in stems):
+                continue
+            if len(stems) == 1 and not re.search(
+                r"football|soccer|\bfc\b|\bfk\b|стадион|stadium|футбол", file_title
+            ):
+                continue
+            return info.get("thumburl") or info.get("url")
+    return None
+
+
+def find_fallback_image(title: str, news_items: List[Dict[str, Any]], own_id: str) -> Optional[str]:
+    return find_image_from_similar_news(title, news_items, own_id) or find_commons_image(title)
+
+
 def publish_news() -> None:
     posted_data = load_posted()
     posted_ids = set(posted_data.get("ids", []))
@@ -2251,6 +2362,11 @@ def publish_news() -> None:
             final_image = article_image or item["image"]
         else:
             final_image = item["image"] or article_image
+        if not final_image:
+            final_image = find_fallback_image(title, news_items, news_id)
+            if final_image:
+                logging.info(f"Подобрал картинку по смыслу: {title[:80]}")
+
         message_id: Optional[int] = None
         success = False
 
