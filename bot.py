@@ -49,7 +49,7 @@ SLEEP_BETWEEN_POSTS = 2 * 60
 LOOP_MIN_SECONDS = 40 * 60  # минимум 40 минут между циклами
 LOOP_MAX_SECONDS = 60 * 60  # максимум 60 минут между циклами
 # Одноразовый ручной запуск: после указанного времени снова действует обычная пауза.
-FORCE_FIRST_POST_BEFORE_UTC = datetime(2026, 11, 23, 12, 11, tzinfo=timezone.utc)
+FORCE_FIRST_POST_BEFORE_UTC = datetime(2026, 11, 23, 12, 0, tzinfo=timezone.utc)
 STRICT_KEYWORD_FILTER = True
 MAX_POST_LENGTH = 3200
 MIN_ARTICLE_TEXT_LEN = 220
