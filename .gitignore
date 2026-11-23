@@ -3,3 +3,5 @@ __pycache__/
 *.pyc
 bot_runtime_*.log
 .env
+BOT_TOKENS*.txt
+posted_news.json

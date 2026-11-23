@@ -696,6 +696,56 @@ def set_message_reaction(message_id: int, emoji: str) -> bool:
     )
 
 
+EXTRA_REACTION_POOL = ["👍", "🔥", "⚡", "👏", "💯", "🤩", "🎉", "😍"]
+BOT_TOKEN_PATTERN = r"\d{6,}:[A-Za-z0-9_-]{30,}"
+
+
+def load_extra_reaction_tokens() -> List[str]:
+    """Токены дополнительных ботов из REACTION_BOT_TOKENS.
+
+    Принимает токены через запятую, пробел или с новой строки; всё, что не
+    похоже на токен (например, комментарии), игнорируется."""
+    raw = os.getenv("REACTION_BOT_TOKENS", "")
+    tokens: List[str] = []
+    for token in re.findall(BOT_TOKEN_PATTERN, raw):
+        if token != BOT_TOKEN and token not in tokens:
+            tokens.append(token)
+    return tokens
+
+
+def set_reaction_as_bot(token: str, message_id: int, emoji: str) -> bool:
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{token}/setMessageReaction",
+            data={
+                "chat_id": CHANNEL_ID,
+                "message_id": message_id,
+                "reaction": json.dumps([{"type": "emoji", "emoji": emoji}]),
+            },
+            timeout=REQUEST_TIMEOUT,
+        )
+        if not response.ok:
+            # Токен в лог не пишем, только начало номера бота.
+            logging.warning(f"Бот {token.split(':')[0]} не поставил реакцию {emoji}: {response.text[:200]}")
+        return response.ok
+    except Exception as e:
+        logging.warning(f"Бот {token.split(':')[0]}: ошибка реакции: {e}")
+        return False
+
+
+def react_with_extra_bots(message_id: int, primary_emoji: str) -> None:
+    """Каждый дополнительный бот ставит свою реакцию, отличную от остальных."""
+    tokens = load_extra_reaction_tokens()
+    if not tokens:
+        return
+    pool = [e for e in EXTRA_REACTION_POOL if e != primary_emoji]
+    for index, token in enumerate(tokens):
+        emoji = pool[index % len(pool)]
+        if not set_reaction_as_bot(token, message_id, emoji) and emoji != REACTION_FALLBACK:
+            set_reaction_as_bot(token, message_id, REACTION_FALLBACK)
+        time.sleep(1)
+
+
 def react_to_post(message_id: Optional[int], title: str, summary: str = "") -> None:
     """Ставит реакцию по смыслу новости. Сбой реакции не мешает публикации."""
     if message_id is None:
@@ -704,7 +754,9 @@ def react_to_post(message_id: Optional[int], title: str, summary: str = "") -> N
         kind = detect_news_kind(title, strip_html(summary))
         emoji = REACTION_BY_KIND.get(kind, REACTION_FALLBACK)
         if not set_message_reaction(message_id, emoji) and emoji != REACTION_FALLBACK:
-            set_message_reaction(message_id, REACTION_FALLBACK)
+            emoji = REACTION_FALLBACK
+            set_message_reaction(message_id, emoji)
+        react_with_extra_bots(message_id, emoji)
     except Exception as e:
         logging.warning(f"Не удалось поставить реакцию: {e}")
 
