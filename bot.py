@@ -13,7 +13,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Optional, List, Dict, Any, Tuple
-from urllib.parse import urljoin, urlparse, parse_qsl, urlencode, urlunparse
+from urllib.parse import urljoin, urlparse, parse_qsl, urlencode, urlunparse, quote
 try:
     from zoneinfo import ZoneInfo
 except Exception:
@@ -49,7 +49,7 @@ SLEEP_BETWEEN_POSTS = 2 * 60
 LOOP_MIN_SECONDS = 40 * 60  # минимум 40 минут между циклами
 LOOP_MAX_SECONDS = 60 * 60  # максимум 60 минут между циклами
 # Одноразовый ручной запуск: после указанного времени снова действует обычная пауза.
-FORCE_FIRST_POST_BEFORE_UTC = datetime(2026, 11, 23, 12, 32, tzinfo=timezone.utc)
+FORCE_FIRST_POST_BEFORE_UTC = datetime(2026, 11, 23, 12, 0, tzinfo=timezone.utc)
 STRICT_KEYWORD_FILTER = True
 MAX_POST_LENGTH = 3200
 MIN_ARTICLE_TEXT_LEN = 220
@@ -2659,6 +2659,132 @@ def find_commons_image(title: str) -> Optional[str]:
     return None
 
 
+WIKIDATA_API = "https://www.wikidata.org/w/api.php"
+WIKIDATA_HEADERS = {"User-Agent": "football-news-bot/1.0 (football news channel; image lookup)"}
+WIKIDATA_MAX_NAMES_PER_POST = 3
+PHOTO_CREDIT_LINE = "📷 Фото: Wikimedia Commons"
+_FOOTBALL_PERSON_OCCUPATIONS = {"Q937857", "Q628099"}      # футболист, футбольный тренер
+_FOOTBALL_TEAM_CLASSES = {"Q476028", "Q15944511", "Q6979593"}  # клуб, футбольный клуб, сборная
+_wikidata_cache: Dict[str, Optional[str]] = {}
+_wikidata_blocked_until = 0.0
+
+
+def extract_entity_names(title: str) -> List[str]:
+    """Имена игроков (в порядке появления) и затем клубы из «ёлочек»."""
+    title = title.replace("’", "'").replace("`", "'")
+    persons = re.findall(r"(?<![«\w])([А-ЯЁ][а-яё'-]+(?:\s+[А-ЯЁ][а-яё'-]+){1,2})(?![»\w])", title)
+    clubs = re.findall(r"«([^»]{3,40})»", title)
+    names: List[str] = []
+    for name in persons + clubs:
+        name = normalize_spaces(name)
+        if name and name.lower() not in {n.lower() for n in names}:
+            names.append(name)
+    return names
+
+
+def _wikidata_get(params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    global _wikidata_blocked_until
+    if time.time() < _wikidata_blocked_until:
+        return None
+    try:
+        response = requests.get(
+            WIKIDATA_API, params={**params, "format": "json"},
+            headers=WIKIDATA_HEADERS, timeout=REQUEST_TIMEOUT,
+        )
+        if response.status_code == 429:
+            try:
+                wait = max(5, int(response.headers.get("Retry-After", "5")))
+            except ValueError:
+                wait = 30
+            _wikidata_blocked_until = time.time() + wait  # не долбим сервис, если он просит подождать
+            logging.warning(f"Викиданные просят снизить частоту запросов, пауза {wait} с")
+            return None
+        return response.json()
+    except Exception as e:
+        logging.warning(f"Запрос к Викиданным не удался: {e}")
+        return None
+
+
+def _claim_values(claims: Dict[str, Any], prop: str) -> List[Any]:
+    values = []
+    for claim in claims.get(prop, []):
+        value = (claim.get("mainsnak", {}).get("datavalue") or {}).get("value")
+        if value is not None:
+            values.append(value)
+    return values
+
+
+def _name_variants(name: str) -> List[str]:
+    """Имя и его формы без окончания: «Краснодара» -> «Краснодар», «Краснода»."""
+    variants = [name]
+    words = name.split()
+    last = words[-1]
+    for cut in (1, 2):
+        if len(last) - cut >= 4:
+            variants.append(" ".join(words[:-1] + [last[:-cut]]))
+    return variants
+
+
+def lookup_wikidata_image(name: str) -> Optional[str]:
+    """Фото игрока/тренера или клуба по имени. Только если это точно футбол."""
+    key = name.lower()
+    if key in _wikidata_cache:
+        return _wikidata_cache[key]
+    result: Optional[str] = None
+    service_failed = False
+    for variant in _name_variants(name):
+        found = _wikidata_get({
+            "action": "wbsearchentities", "search": variant, "language": "ru",
+            "uselang": "ru", "limit": 10, "type": "item",
+        })
+        if found is None:
+            service_failed = True
+            break
+        ids = [hit["id"] for hit in found.get("search", []) if hit.get("id")]
+        if not ids:
+            continue
+        data = _wikidata_get({"action": "wbgetentities", "ids": "|".join(ids), "props": "claims"})
+        if data is None:
+            service_failed = True
+            break
+        entities = (data or {}).get("entities", {})
+        for entity_id in ids:
+            claims = (entities.get(entity_id) or {}).get("claims", {})
+            occupations = {v.get("id") for v in _claim_values(claims, "P106") if isinstance(v, dict)}
+            classes = {v.get("id") for v in _claim_values(claims, "P31") if isinstance(v, dict)}
+            if not (occupations & _FOOTBALL_PERSON_OCCUPATIONS or classes & _FOOTBALL_TEAM_CLASSES):
+                continue
+            files = [f for f in (_claim_values(claims, "P18") or _claim_values(claims, "P154")) if isinstance(f, str)]
+            if not files:
+                continue
+            file_url = "https://commons.wikimedia.org/wiki/Special:FilePath/" + quote(files[0]) + "?width=1000"
+            try:
+                # Telegram надёжнее принимает прямую ссылку, а не редирект.
+                direct = requests.head(file_url, headers=WIKIDATA_HEADERS, allow_redirects=True, timeout=REQUEST_TIMEOUT)
+                if direct.ok and "image" in (direct.headers.get("content-type") or ""):
+                    result = direct.url
+            except Exception as e:
+                logging.warning(f"Не удалось разрешить ссылку на файл {files[0]}: {e}")
+            if result:
+                break
+        if result:
+            break
+        time.sleep(0.3)
+    if not service_failed:  # при сбое сервиса «не найдено» не запоминаем
+        _wikidata_cache[key] = result
+    return result
+
+
+def find_wikidata_image(title: str) -> Optional[str]:
+    for name in extract_entity_names(title)[:WIKIDATA_MAX_NAMES_PER_POST]:
+        image = lookup_wikidata_image(name)
+        time.sleep(0.5)
+        if image:
+            logging.info(f"Нашёл фото в Викиданных для «{name}»")
+            return image
+    return None
+
+
 def find_fallback_image(title: str, news_items: List[Dict[str, Any]], own_id: str) -> Optional[str]:
     return find_image_from_similar_news(title, news_items, own_id) or find_commons_image(title)
 
@@ -2748,10 +2874,21 @@ def publish_news() -> None:
         else:
             image_candidates = [rss_image, article_image]
         if not any(image_candidates):
-            fallback_image = find_fallback_image(title, news_items, news_id)
+            # 1) та же новость в другом источнике; 2) фото игрока/клуба из Викиданных;
+            # 3) поиск файла на Commons по названию.
+            fallback_image = find_image_from_similar_news(title, news_items, news_id)
+            needs_credit = False
+            if not fallback_image:
+                fallback_image = find_wikidata_image(title)
+                needs_credit = bool(fallback_image)
+            if not fallback_image:
+                fallback_image = find_commons_image(title)
+                needs_credit = bool(fallback_image)
             if fallback_image:
                 logging.info(f"Подобрал картинку по смыслу: {title[:80]}")
                 image_candidates = [fallback_image]
+                if needs_credit:
+                    post_text = post_text + chr(10) + PHOTO_CREDIT_LINE
 
         message_id = send_post_with_image(image_candidates, post_text)
         success = message_id is not None
