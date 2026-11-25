@@ -2291,11 +2291,38 @@ def fetch_league_matches_for_date(league_code: str, target_date: datetime.date) 
     return league_name, matches
 
 
+_soccer365_session: Optional[requests.Session] = None
+_soccer365_session_created = 0.0
+SOCCER365_MSK_OFFSET_HOURS = 3
+
+
+def get_soccer365_session() -> requests.Session:
+    """Сессия soccer365 с московским часовым поясом.
+
+    Сайт показывает время в поясе посетителя, который определяет по IP: с сервера
+    Render (США) он отдавал время на 9 часов раньше московского. Чтобы не зависеть
+    от того, откуда бот ходит на сайт, поясом явно задаём МСК."""
+    global _soccer365_session, _soccer365_session_created
+    if _soccer365_session is None or time.time() - _soccer365_session_created > 30 * 60:
+        session = requests.Session()
+        session.headers.update(get_headers())
+        try:
+            session.get(
+                f"https://soccer365.ru/?timezone_offset={SOCCER365_MSK_OFFSET_HOURS}&url=https%3A%2F%2Fsoccer365.ru%2Fonline%2F",
+                timeout=REQUEST_TIMEOUT,
+            )
+        except Exception as e:
+            logging.warning(f"Не удалось выставить часовой пояс на soccer365: {e}")
+        _soccer365_session = session
+        _soccer365_session_created = time.time()
+    return _soccer365_session
+
+
 def fetch_soccer365_matches_for_date(competition_id: int, target_date: datetime.date) -> List[Dict[str, str]]:
     url = SOCCER365_GAMES_DATA_URL.format(competition_id=competition_id)
     headers = get_headers()
     headers["X-Requested-With"] = "XMLHttpRequest"
-    html_data = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT).text
+    html_data = get_soccer365_session().get(url, headers={"X-Requested-With": "XMLHttpRequest"}, timeout=REQUEST_TIMEOUT).text
     soup = BeautifulSoup(html_data, "html.parser")
 
     matches: List[Dict[str, str]] = []
@@ -2336,7 +2363,7 @@ def fetch_soccer365_matches_for_date(competition_id: int, target_date: datetime.
 
 def fetch_soccer365_online_matches_today(target_date: datetime.date) -> Dict[int, List[Dict[str, str]]]:
     headers = get_headers()
-    html_data = requests.get(SOCCER365_ONLINE_URL, headers=headers, timeout=REQUEST_TIMEOUT).text
+    html_data = get_soccer365_session().get(SOCCER365_ONLINE_URL, timeout=REQUEST_TIMEOUT).text
     soup = BeautifulSoup(html_data, "html.parser")
 
     by_competition: Dict[int, List[Dict[str, str]]] = {}
