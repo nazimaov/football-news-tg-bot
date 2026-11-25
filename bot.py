@@ -1689,6 +1689,29 @@ def build_safe_fallback_story(title: str, rss_summary: str) -> Tuple[str, str, s
     return truncate_smart(normalize_spaces(title), 240), DETAILS_FALLBACK_TEXT, ""
 
 
+def ensure_sentence_end(text: str) -> str:
+    """Возвращает предложению точку, которую срезала очистка."""
+    text = normalize_spaces(text)
+    if not text or text[-1] in ".!?…":
+        return text
+    return text + "."
+
+
+def fit_whole_sentences(sentences: List[str], max_len: int) -> str:
+    """Склеивает целые предложения (с точками), не обрывая последнее на полуслове."""
+    result = ""
+    for sentence in sentences:
+        piece = ensure_sentence_end(sentence)
+        candidate = f"{result} {piece}".strip()
+        if len(candidate) > max_len:
+            break
+        result = candidate
+    if result:
+        return result
+    # Первое же предложение не помещается: режем по слову, но честно ставим «…».
+    return truncate_smart(sentences[0], max_len)
+
+
 def build_post_story(title: str, summary: str) -> Tuple[str, str, str]:
     def sentence_key(text: str) -> str:
         normalized = normalize_spaces(text).lower()
@@ -1702,7 +1725,10 @@ def build_post_story(title: str, summary: str) -> Tuple[str, str, str]:
         cleaned_sentence = sanitize_post_sentence(sentence, title)
         if sentences and is_sentence_fragment(cleaned_sentence):
             # Не выносим придаточное предложение в отдельные «Детали».
-            sentences[-1] = normalize_spaces(f"{sentences[-1]} {cleaned_sentence}")
+            # Если в источнике это было новое предложение (с заглавной буквы),
+            # возвращаем точку, которую срезала очистка.
+            previous = ensure_sentence_end(sentences[-1]) if cleaned_sentence[:1].isupper() else sentences[-1]
+            sentences[-1] = normalize_spaces(f"{previous} {cleaned_sentence}")
             continue
         key = sentence_key(cleaned_sentence)
         if not key or key in seen_keys:
@@ -1718,8 +1744,9 @@ def build_post_story(title: str, summary: str) -> Tuple[str, str, str]:
     # на позднем этапе, если весь пост действительно не помещается.
     lead = truncate_smart(sentences[0], 520)
 
-    details_source = " ".join(sentences[1:4]) if len(sentences) > 1 else ""
-    if not details_source:
+    details_sentences: List[str] = sentences[1:3]
+    details_source = ""
+    if not details_sentences:
         # Не режем одно предложение по запятым: так придаточные вроде
         # «где ...» ошибочно превращались в отдельный блок «Детали».
         clauses = [normalize_spaces(part) for part in re.split(r"[;:]\s+", sentences[0]) if normalize_spaces(part)]
@@ -1740,24 +1767,25 @@ def build_post_story(title: str, summary: str) -> Tuple[str, str, str]:
             lead = lead_cut + "..."
             details_source = normalize_spaces(sentences[0][len(lead_cut):])
 
-    if not details_source:
-        details_source = DETAILS_FALLBACK_TEXT
-    details = truncate_smart(details_source, 420)
+    if details_sentences:
+        details = fit_whole_sentences(details_sentences, 420)
+    elif details_source:
+        details = truncate_smart(details_source, 420)
+    else:
+        details = DETAILS_FALLBACK_TEXT
     if sentence_key(details) == sentence_key(lead):
         details = DETAILS_FALLBACK_TEXT
     if len(sentence_key(lead)) < 20:
         return build_safe_fallback_story(title, summary)
 
+    # «Почему важно» — только предложение, которого нет ни в «Коротко», ни в «Деталях».
     insight = ""
     if len(sentences) >= 4:
-        insight = truncate_smart(sentences[3], 280)
-    elif len(sentences) >= 3:
-        insight = truncate_smart(sentences[2], 280)
-
-    insight_key = sentence_key(insight)
-    details_key = sentence_key(details)
-    if insight_key in {sentence_key(lead), details_key} or (insight_key and insight_key in details_key):
-        insight = ""
+        candidate = truncate_smart(sentences[3], 280)
+        candidate_key = sentence_key(candidate)
+        details_key = sentence_key(details)
+        if candidate_key and candidate_key not in {sentence_key(lead), details_key} and candidate_key not in details_key:
+            insight = ensure_sentence_end(candidate)
 
     return lead, details, insight
 
