@@ -50,6 +50,9 @@ LOOP_MIN_SECONDS = 40 * 60  # минимум 40 минут между цикла
 LOOP_MAX_SECONDS = 60 * 60  # максимум 60 минут между циклами
 # Одноразовый ручной запуск: после указанного времени снова действует обычная пауза.
 FORCE_FIRST_POST_BEFORE_UTC = datetime(2026, 11, 23, 13, 11, tzinfo=timezone.utc)
+# Разовая внеплановая публикация сводки матчей: до этого времени сводка выходит
+# сразу (если на сегодня её ещё нет), без ожидания окна 06:00 МСК.
+FORCE_SCHEDULE_BEFORE_UTC = datetime(2026, 11, 25, 11, 35, tzinfo=timezone.utc)
 STRICT_KEYWORD_FILTER = True
 MAX_POST_LENGTH = 3200
 MIN_ARTICLE_TEXT_LEN = 220
@@ -2496,10 +2499,12 @@ def build_daily_schedule_post(target_date: datetime.date) -> str:
 
 
 def maybe_publish_daily_schedule(now_msk: datetime) -> None:
-    if now_msk.hour != DAILY_SCHEDULE_HOUR_MSK:
-        return
-    if now_msk.minute >= DAILY_SCHEDULE_WINDOW_MINUTES:
-        return
+    forced = datetime.now(timezone.utc) < FORCE_SCHEDULE_BEFORE_UTC
+    if not forced:
+        if now_msk.hour != DAILY_SCHEDULE_HOUR_MSK:
+            return
+        if now_msk.minute >= DAILY_SCHEDULE_WINDOW_MINUTES:
+            return
 
     today_key = now_msk.date().isoformat()
     posted_data = load_posted()
